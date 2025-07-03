@@ -38,14 +38,24 @@ func (s *Service) AnalyzeChangesForVersioning(ctx context.Context, includeStaged
 		return nil, fmt.Errorf("not in a Git repository")
 	}
 
-	// Get diff summary
+	// Get diff summary - if no uncommitted changes, analyze the latest commit
 	diffSummary, err := s.gitService.GetDiffSummary(includeStaged)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff summary: %w", err)
 	}
 
+	// If no uncommitted changes, analyze the latest commit
 	if len(diffSummary.Files) == 0 {
-		return nil, fmt.Errorf("no changes detected")
+		// Get the latest commit diff summary
+		latestCommitDiff, err := s.gitService.GetCommitDiffSummary("HEAD")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get latest commit diff: %w", err)
+		}
+		diffSummary = latestCommitDiff
+
+		if len(diffSummary.Files) == 0 {
+			return nil, fmt.Errorf("no changes detected in latest commit")
+		}
 	}
 
 	// Process the diff

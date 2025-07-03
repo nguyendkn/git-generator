@@ -362,6 +362,57 @@ func (s *Service) GetCommitDiff(commitHash string) (string, error) {
 	return string(output), nil
 }
 
+// GetCommitDiffSummary returns the diff summary for a specific commit
+func (s *Service) GetCommitDiffSummary(commitHash string) (*types.DiffSummary, error) {
+	// Get the diff for the commit
+	cmd := exec.Command("git", "show", "--numstat", "--format=", commitHash)
+	cmd.Dir = s.repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit diff summary: %w", err)
+	}
+
+	// Parse the numstat output
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var files []types.FileChange
+	totalAdded, totalDeleted := 0, 0
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 3 {
+			continue
+		}
+
+		added, _ := strconv.Atoi(parts[0])
+		deleted, _ := strconv.Atoi(parts[1])
+		path := parts[2]
+
+		files = append(files, types.FileChange{
+			Path:         path,
+			ChangeType:   types.ChangeTypeModified,
+			LinesAdded:   added,
+			LinesDeleted: deleted,
+		})
+
+		totalAdded += added
+		totalDeleted += deleted
+	}
+
+	return &types.DiffSummary{
+		Files:        files,
+		TotalAdded:   totalAdded,
+		TotalDeleted: totalDeleted,
+		TotalFiles:   len(files),
+		Timestamp:    time.Now(),
+		Additions:    totalAdded,
+		Deletions:    totalDeleted,
+	}, nil
+}
+
 // GetTags returns all Git tags with version information
 func (s *Service) GetTags() ([]*types.GitTag, error) {
 	cmd := exec.Command("git", "tag", "-l", "--sort=-version:refname", "--format=%(refname:short)|%(objectname)|%(creatordate:iso)|%(contents:subject)")
