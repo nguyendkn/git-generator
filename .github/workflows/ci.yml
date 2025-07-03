@@ -1,0 +1,241 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0, v2.1.3, etc.
+
+env:
+  GO_VERSION: '1.24.4'
+  APP_NAME: 'git-generator'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Generate coverage report
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.out
+            coverage.html
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go fmt check
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "The following files are not formatted:"
+            gofmt -s -l .
+            exit 1
+          fi
+
+  build:
+    name: Build and Release
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Windows builds
+          - goos: windows
+            goarch: amd64
+            platform: windows-amd64
+            extension: .exe
+          - goos: windows
+            goarch: arm64
+            platform: windows-arm64
+            extension: .exe
+
+          # Linux builds
+          - goos: linux
+            goarch: amd64
+            platform: linux-amd64
+            extension: ''
+          - goos: linux
+            goarch: arm64
+            platform: linux-arm64
+            extension: ''
+
+          # macOS builds
+          - goos: darwin
+            goarch: amd64
+            platform: macos-amd64
+            extension: ''
+          - goos: darwin
+            goarch: arm64
+            platform: macos-arm64
+            extension: ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_clean=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME="${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }}"
+          echo "Building $BINARY_NAME for ${{ matrix.goos }}/${{ matrix.goarch }}"
+
+          go build \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.version_clean }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.gitCommit=${{ github.sha }}" \
+            -o "$BINARY_NAME" \
+            ./cmd/git-generator/main.go
+
+          echo "binary_name=$BINARY_NAME" >> $GITHUB_OUTPUT
+        id: build
+
+      - name: Generate checksums
+        run: |
+          BINARY_NAME="${{ steps.build.outputs.binary_name }}"
+          sha256sum "$BINARY_NAME" > "$BINARY_NAME.sha256"
+          md5sum "$BINARY_NAME" > "$BINARY_NAME.md5"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.platform }}
+          path: |
+            ${{ steps.build.outputs.binary_name }}
+            ${{ steps.build.outputs.binary_name }}.sha256
+            ${{ steps.build.outputs.binary_name }}.md5
+
+  release:
+    name: Create Release
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_clean=${VERSION#v}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p ./release-assets
+          find ./artifacts -type f -name "${{ env.APP_NAME }}-*" -exec cp {} ./release-assets/ \;
+          ls -la ./release-assets/
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## 🚀 Release ${{ steps.version.outputs.version }}
+
+          ### 📦 Downloads
+
+          Choose the appropriate binary for your platform:
+
+          | Platform | Architecture | Download |
+          |----------|--------------|----------|
+          | Windows | x64 | `${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-windows-amd64.exe` |
+          | Windows | ARM64 | `${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-windows-arm64.exe` |
+          | Linux | x64 | `${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-linux-amd64` |
+          | Linux | ARM64 | `${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-linux-arm64` |
+          | macOS | Intel | `${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-macos-amd64` |
+          | macOS | Apple Silicon | `${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-macos-arm64` |
+
+          ### 🔐 Security
+
+          All binaries include SHA256 and MD5 checksums for verification.
+
+          ### 📋 Installation
+
+          1. Download the appropriate binary for your platform
+          2. Verify the checksum (recommended)
+          3. Make the binary executable (Linux/macOS): `chmod +x ${{ env.APP_NAME }}-*`
+          4. Move to your PATH or run directly
+
+          ### 🔍 Verification
+
+          ```bash
+          # Verify SHA256 checksum
+          sha256sum -c ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-<platform>.sha256
+
+          # Or verify MD5 checksum
+          md5sum -c ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-<platform>.md5
+          ```
+
+          ---
+
+          **Built with Go ${{ env.GO_VERSION }}** | **Commit:** ${{ github.sha }}
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: ./release-assets/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload coverage to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          files: |
+            coverage.out
+            coverage.html
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
