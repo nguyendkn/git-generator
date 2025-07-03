@@ -24,15 +24,15 @@ const (
 func ShowBanner() {
 	// Create figlet banner
 	banner := figure.NewFigure("Git Generator", "slant", true)
-	
+
 	// Print banner in cyan color
 	fmt.Printf("%s%s%s\n", ColorCyan, banner.String(), ColorReset)
-	
+
 	// Print author information
 	fmt.Printf("%s%s%s\n", ColorBold, strings.Repeat("=", 60), ColorReset)
-	fmt.Printf("%s%sAuthor:%s Dao Khoi Nguyen - dknguyen2304@gmail.com%s\n", 
+	fmt.Printf("%s%sAuthor:%s Dao Khoi Nguyen - dknguyen2304@gmail.com%s\n",
 		ColorBold, ColorGreen, ColorWhite, ColorReset)
-	fmt.Printf("%s%sVersion:%s 1.0.0 - AI-Powered Git Commit Message Generator%s\n", 
+	fmt.Printf("%s%sVersion:%s 1.0.0 - AI-Powered Git Commit Message Generator%s\n",
 		ColorBold, ColorBlue, ColorWhite, ColorReset)
 	fmt.Printf("%s%s%s\n\n", ColorBold, strings.Repeat("=", 60), ColorReset)
 }
