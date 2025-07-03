@@ -44,10 +44,11 @@ type Manager struct {
 	diffProc   *diff.Processor
 	aiClient   *ai.GeminiClient
 	genService *generator.Service
+	version    string
 }
 
 // NewManager creates a new interface manager
-func NewManager(cfg *types.Config, cfgMgr *config.Manager) (*Manager, error) {
+func NewManager(cfg *types.Config, cfgMgr *config.Manager, version string) (*Manager, error) {
 	gitService := git.NewService(".")
 	diffProcessor := diff.NewProcessor(cfg.Git.MaxDiffSize, 20)
 
@@ -65,6 +66,7 @@ func NewManager(cfg *types.Config, cfgMgr *config.Manager) (*Manager, error) {
 		diffProc:   diffProcessor,
 		aiClient:   aiClient,
 		genService: genService,
+		version:    version,
 	}, nil
 }
 
@@ -134,7 +136,7 @@ func (m *Manager) generateCLI(ctx context.Context, req GenerateRequest) (*genera
 // generateInteractive handles interactive-based generation
 func (m *Manager) generateInteractive(ctx context.Context, req GenerateRequest) (*generator.GenerateResult, error) {
 	// Show banner and welcome
-	ui.ShowBanner()
+	ui.ShowBanner(m.version)
 	ui.ShowWelcomeMessage()
 
 	// Get interactive options (merge with request)

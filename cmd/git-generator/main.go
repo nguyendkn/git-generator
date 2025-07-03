@@ -19,7 +19,11 @@ import (
 )
 
 var (
-	version      = "1.0.0"
+	// Build-time variables set by ldflags
+	version   = "dev"
+	buildTime = "unknown"
+	gitCommit = "unknown"
+
 	cfgManager   *config.Manager
 	appConfig    *types.Config
 	interfaceMgr *interfaces.Manager
@@ -28,7 +32,7 @@ var (
 func main() {
 	// Show banner when running without subcommands or with generate command
 	if len(os.Args) == 1 || (len(os.Args) > 1 && (os.Args[1] == "generate" || os.Args[1] == "gen" || os.Args[1] == "g")) {
-		ui.ShowBanner()
+		ui.ShowBanner(version)
 		ui.ShowWelcomeMessage()
 	}
 
@@ -54,7 +58,7 @@ that follow best practices.`,
 	Version: version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Skip config loading for certain commands
-		if cmd.Name() == "init" || cmd.Name() == "version" || cmd.Name() == "help" {
+		if cmd.Name() == "init" || cmd.Name() == "version" || cmd.Name() == "info" || cmd.Name() == "help" {
 			return nil
 		}
 
@@ -69,7 +73,7 @@ that follow best practices.`,
 
 		// Initialize interface manager for generate and interactive commands
 		if cmd.Name() == "generate" || cmd.Name() == "interactive" {
-			interfaceMgr, err = interfaces.NewManager(appConfig, cfgManager)
+			interfaceMgr, err = interfaces.NewManager(appConfig, cfgManager, version)
 			if err != nil {
 				return fmt.Errorf("failed to initialize interface manager: %w", err)
 			}
@@ -87,6 +91,7 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(modeCmd)
 	rootCmd.AddCommand(tagCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 var generateCmd = &cobra.Command{
@@ -211,6 +216,22 @@ Tự động stage tất cả thay đổi trước khi tạo commit message.`,
 			ui.ShowSuccessMessage("Commit message đã được tạo và áp dụng:")
 			fmt.Println(result.CommitMessage.String())
 		}
+
+		return nil
+	},
+}
+
+var versionCmd = &cobra.Command{
+	Use:     "info",
+	Short:   "Hiển thị thông tin phiên bản chi tiết",
+	Aliases: []string{"version"},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ui.ShowBanner(version)
+		ui.PrintHeader("Thông tin phiên bản")
+
+		fmt.Printf("📦 Version: %s\n", version)
+		fmt.Printf("🕒 Build Time: %s\n", buildTime)
+		fmt.Printf("🔗 Git Commit: %s\n", gitCommit)
 
 		return nil
 	},
@@ -403,7 +424,7 @@ var tagCmd = &cobra.Command{
 - Phân tích diff với AI
 - Lịch sử commit gần đây
 - Quy tắc semantic versioning (semver)`,
-	Aliases: []string{"version", "v"},
+	Aliases: []string{"v"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Get flags
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -436,7 +457,7 @@ var tagCmd = &cobra.Command{
 		versionService := versioning.NewService(gitService, diffProcessor, aiClient, *appConfig)
 
 		// Show banner
-		ui.ShowBanner()
+		ui.ShowBanner(version)
 		ui.PrintHeader("🏷️  Semantic Version Tagging")
 
 		// Validate repository state
