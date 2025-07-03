@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // CommitType represents the type of commit following conventional commit standards
 type CommitType string
@@ -226,4 +229,82 @@ type OutputConfig struct {
 	DryRun           bool   `mapstructure:"dry_run"`
 	Language         string `mapstructure:"language"`           // vi, en
 	MaxSubjectLength int    `mapstructure:"max_subject_length"` // Max subject line length
+}
+
+// VersionBumpType represents the type of semantic version bump
+type VersionBumpType string
+
+const (
+	VersionBumpPatch VersionBumpType = "patch" // Bug fixes, documentation updates
+	VersionBumpMinor VersionBumpType = "minor" // New features, backwards-compatible changes
+	VersionBumpMajor VersionBumpType = "major" // Breaking changes, API changes
+)
+
+// PreReleaseType represents pre-release version types
+type PreReleaseType string
+
+const (
+	PreReleaseAlpha PreReleaseType = "alpha"
+	PreReleaseBeta  PreReleaseType = "beta"
+	PreReleaseRC    PreReleaseType = "rc"
+)
+
+// SemanticVersion represents a semantic version
+type SemanticVersion struct {
+	Major      int            `json:"major"`
+	Minor      int            `json:"minor"`
+	Patch      int            `json:"patch"`
+	PreRelease PreReleaseType `json:"pre_release,omitempty"`
+	PreNumber  int            `json:"pre_number,omitempty"`
+	Raw        string         `json:"raw"` // Original version string
+}
+
+// String returns the formatted semantic version
+func (sv *SemanticVersion) String() string {
+	version := fmt.Sprintf("%d.%d.%d", sv.Major, sv.Minor, sv.Patch)
+	if sv.PreRelease != "" {
+		version += fmt.Sprintf("-%s", sv.PreRelease)
+		if sv.PreNumber > 0 {
+			version += fmt.Sprintf(".%d", sv.PreNumber)
+		}
+	}
+	return version
+}
+
+// TagName returns the version with 'v' prefix for Git tags
+func (sv *SemanticVersion) TagName() string {
+	return "v" + sv.String()
+}
+
+// VersionAnalysis represents AI analysis of changes for version determination
+type VersionAnalysis struct {
+	RecommendedBump VersionBumpType `json:"recommended_bump"`
+	Confidence      float64         `json:"confidence"` // 0.0 to 1.0
+	Reasoning       string          `json:"reasoning"`  // AI explanation
+	BreakingChanges []string        `json:"breaking_changes,omitempty"`
+	NewFeatures     []string        `json:"new_features,omitempty"`
+	BugFixes        []string        `json:"bug_fixes,omitempty"`
+	Documentation   []string        `json:"documentation,omitempty"`
+	Dependencies    []string        `json:"dependencies,omitempty"`
+	Metadata        map[string]any  `json:"metadata,omitempty"`
+}
+
+// GitTag represents a Git tag with version information
+type GitTag struct {
+	Name        string           `json:"name"`         // Full tag name (e.g., "v1.2.3")
+	Version     *SemanticVersion `json:"version"`      // Parsed semantic version
+	Hash        string           `json:"hash"`         // Commit hash
+	Date        time.Time        `json:"date"`         // Tag creation date
+	Message     string           `json:"message"`      // Tag annotation message
+	IsAnnotated bool             `json:"is_annotated"` // Whether it's an annotated tag
+}
+
+// TaggingOptions represents options for version tagging
+type TaggingOptions struct {
+	DryRun     bool            `json:"dry_run"`               // Preview only, don't create tag
+	ForceBump  VersionBumpType `json:"force_bump,omitempty"`  // Force specific version type
+	PreRelease PreReleaseType  `json:"pre_release,omitempty"` // Create pre-release version
+	Message    string          `json:"message,omitempty"`     // Custom tag annotation message
+	Push       bool            `json:"push"`                  // Push tag to remote after creation
+	Annotated  bool            `json:"annotated"`             // Create annotated tag
 }

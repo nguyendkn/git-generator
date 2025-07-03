@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -142,6 +143,41 @@ func (gc *GeminiClient) GenerateCommitMessage(ctx context.Context, processedDiff
 	}
 
 	return gc.parseCommitMessage(responseText, style)
+}
+
+// AnalyzeChangesForVersioning analyzes changes to determine semantic version bump type
+func (gc *GeminiClient) AnalyzeChangesForVersioning(ctx context.Context, processedDiff *diff.ProcessedDiff, recentCommits []*types.CommitInfo) (*types.VersionAnalysis, error) {
+	if processedDiff == nil {
+		return nil, fmt.Errorf("processed diff is nil")
+	}
+
+	// Apply rate limiting
+	gc.rateLimiter.Wait()
+
+	prompt := gc.buildVersionAnalysisPrompt(processedDiff, recentCommits)
+
+	resp, err := gc.model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate version analysis: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 {
+		return nil, fmt.Errorf("no response candidates received")
+	}
+
+	candidate := resp.Candidates[0]
+	if candidate.Content == nil || len(candidate.Content.Parts) == 0 {
+		return nil, fmt.Errorf("empty response content")
+	}
+
+	responseText := ""
+	for _, part := range candidate.Content.Parts {
+		if textPart, ok := part.(genai.Text); ok {
+			responseText += string(textPart)
+		}
+	}
+
+	return gc.parseVersionAnalysis(responseText)
 }
 
 // buildPrompt creates a prompt for the AI model
@@ -397,4 +433,168 @@ func (gc *GeminiClient) parseConventionalCommit(subject string, commitMsg *types
 
 	commitMsg.Description = description
 	return nil
+}
+
+// buildVersionAnalysisPrompt creates a prompt for version analysis
+func (gc *GeminiClient) buildVersionAnalysisPrompt(processedDiff *diff.ProcessedDiff, recentCommits []*types.CommitInfo) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("You are an expert software developer tasked with analyzing code changes to determine the appropriate semantic version bump (MAJOR, MINOR, or PATCH) according to semantic versioning principles.\n\n")
+
+	prompt.WriteString("SEMANTIC VERSIONING RULES:\n")
+	prompt.WriteString("- MAJOR: Breaking changes, API changes, incompatible changes\n")
+	prompt.WriteString("- MINOR: New features, backwards-compatible functionality additions\n")
+	prompt.WriteString("- PATCH: Bug fixes, documentation updates, minor improvements\n\n")
+
+	prompt.WriteString("ANALYSIS CRITERIA:\n")
+	prompt.WriteString("1. Breaking Changes: API modifications, removed functions, changed signatures\n")
+	prompt.WriteString("2. New Features: Added functions, new capabilities, feature additions\n")
+	prompt.WriteString("3. Bug Fixes: Error corrections, performance improvements, minor fixes\n")
+	prompt.WriteString("4. Documentation: README updates, comments, documentation changes\n")
+	prompt.WriteString("5. Dependencies: Package updates, dependency changes\n\n")
+
+	// Add recent commits context
+	if len(recentCommits) > 0 {
+		prompt.WriteString("RECENT COMMIT HISTORY (for context):\n")
+		for i, commit := range recentCommits {
+			if i >= 5 { // Limit to 5 recent commits
+				break
+			}
+			prompt.WriteString(fmt.Sprintf("- %s: %s\n", commit.Hash[:8], commit.Subject))
+		}
+		prompt.WriteString("\n")
+	}
+
+	// Add current changes
+	prompt.WriteString("CURRENT CHANGES TO ANALYZE:\n")
+	prompt.WriteString(fmt.Sprintf("Files changed: %d\n", processedDiff.TotalFiles))
+	prompt.WriteString(fmt.Sprintf("Lines added: %d\n", processedDiff.TotalAdded))
+	prompt.WriteString(fmt.Sprintf("Lines deleted: %d\n", processedDiff.TotalDeleted))
+
+	if len(processedDiff.Languages) > 0 {
+		prompt.WriteString("Languages: ")
+		var langs []string
+		for lang := range processedDiff.Languages {
+			langs = append(langs, lang)
+		}
+		prompt.WriteString(strings.Join(langs, ", "))
+		prompt.WriteString("\n")
+	}
+
+	prompt.WriteString("\nFILE CHANGES:\n")
+	for _, chunk := range processedDiff.Chunks {
+		for _, file := range chunk.Files {
+			prompt.WriteString(fmt.Sprintf("- %s (%s): +%d -%d lines\n",
+				file.Path, file.ChangeType, file.LinesAdded, file.LinesDeleted))
+
+			// Include a sample of the diff content for analysis
+			if len(file.Content) > 0 {
+				lines := strings.Split(file.Content, "\n")
+				maxLines := 20 // Limit diff content to avoid token limits
+				if len(lines) > maxLines {
+					lines = lines[:maxLines]
+				}
+				prompt.WriteString("  Sample changes:\n")
+				for _, line := range lines {
+					if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+						prompt.WriteString(fmt.Sprintf("    %s\n", line))
+					}
+				}
+			}
+		}
+	}
+
+	prompt.WriteString("\nRESPONSE FORMAT:\n")
+	prompt.WriteString("Analyze the changes and respond with a JSON object containing:\n")
+	prompt.WriteString("{\n")
+	prompt.WriteString(`  "recommended_bump": "major|minor|patch",` + "\n")
+	prompt.WriteString(`  "confidence": 0.95,` + "\n")
+	prompt.WriteString(`  "reasoning": "Detailed explanation of why this version bump is recommended",` + "\n")
+	prompt.WriteString(`  "breaking_changes": ["list of breaking changes if any"],` + "\n")
+	prompt.WriteString(`  "new_features": ["list of new features if any"],` + "\n")
+	prompt.WriteString(`  "bug_fixes": ["list of bug fixes if any"],` + "\n")
+	prompt.WriteString(`  "documentation": ["list of documentation changes if any"],` + "\n")
+	prompt.WriteString(`  "dependencies": ["list of dependency changes if any"]` + "\n")
+	prompt.WriteString("}\n\n")
+
+	prompt.WriteString("Focus on the actual impact of the changes on users and API compatibility. Be conservative with MAJOR bumps - only recommend them for true breaking changes.")
+
+	return prompt.String()
+}
+
+// parseVersionAnalysis parses the AI response for version analysis
+func (gc *GeminiClient) parseVersionAnalysis(responseText string) (*types.VersionAnalysis, error) {
+	// Clean up the response text
+	responseText = strings.TrimSpace(responseText)
+
+	// Remove markdown code blocks if present
+	if strings.HasPrefix(responseText, "```json") {
+		responseText = strings.TrimPrefix(responseText, "```json")
+		responseText = strings.TrimSuffix(responseText, "```")
+	} else if strings.HasPrefix(responseText, "```") {
+		responseText = strings.TrimPrefix(responseText, "```")
+		responseText = strings.TrimSuffix(responseText, "```")
+	}
+
+	responseText = strings.TrimSpace(responseText)
+
+	// Try to extract JSON from the response
+	jsonStart := strings.Index(responseText, "{")
+	jsonEnd := strings.LastIndex(responseText, "}")
+
+	if jsonStart == -1 || jsonEnd == -1 || jsonStart >= jsonEnd {
+		return nil, fmt.Errorf("no valid JSON found in response")
+	}
+
+	jsonStr := responseText[jsonStart : jsonEnd+1]
+
+	// Parse the JSON response
+	var rawAnalysis struct {
+		RecommendedBump string   `json:"recommended_bump"`
+		Confidence      float64  `json:"confidence"`
+		Reasoning       string   `json:"reasoning"`
+		BreakingChanges []string `json:"breaking_changes"`
+		NewFeatures     []string `json:"new_features"`
+		BugFixes        []string `json:"bug_fixes"`
+		Documentation   []string `json:"documentation"`
+		Dependencies    []string `json:"dependencies"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &rawAnalysis); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
+	// Convert to our types
+	var bumpType types.VersionBumpType
+	switch strings.ToLower(rawAnalysis.RecommendedBump) {
+	case "major":
+		bumpType = types.VersionBumpMajor
+	case "minor":
+		bumpType = types.VersionBumpMinor
+	case "patch":
+		bumpType = types.VersionBumpPatch
+	default:
+		return nil, fmt.Errorf("invalid bump type: %s", rawAnalysis.RecommendedBump)
+	}
+
+	// Ensure confidence is within valid range
+	confidence := rawAnalysis.Confidence
+	if confidence < 0.0 {
+		confidence = 0.0
+	} else if confidence > 1.0 {
+		confidence = 1.0
+	}
+
+	analysis := &types.VersionAnalysis{
+		RecommendedBump: bumpType,
+		Confidence:      confidence,
+		Reasoning:       rawAnalysis.Reasoning,
+		BreakingChanges: rawAnalysis.BreakingChanges,
+		NewFeatures:     rawAnalysis.NewFeatures,
+		BugFixes:        rawAnalysis.BugFixes,
+		Documentation:   rawAnalysis.Documentation,
+		Dependencies:    rawAnalysis.Dependencies,
+	}
+
+	return analysis, nil
 }

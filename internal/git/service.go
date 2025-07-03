@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -358,4 +360,131 @@ func (s *Service) GetCommitDiff(commitHash string) (string, error) {
 	}
 
 	return string(output), nil
+}
+
+// GetTags returns all Git tags with version information
+func (s *Service) GetTags() ([]*types.GitTag, error) {
+	cmd := exec.Command("git", "tag", "-l", "--sort=-version:refname", "--format=%(refname:short)|%(objectname)|%(creatordate:iso)|%(contents:subject)")
+	cmd.Dir = s.repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tags: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var tags []*types.GitTag
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) < 4 {
+			continue
+		}
+
+		tag := &types.GitTag{
+			Name:    parts[0],
+			Hash:    parts[1],
+			Message: parts[3],
+		}
+
+		// Parse date
+		if date, err := time.Parse("2006-01-02 15:04:05 -0700", parts[2]); err == nil {
+			tag.Date = date
+		}
+
+		// Check if it's an annotated tag
+		tag.IsAnnotated = s.isAnnotatedTag(tag.Name)
+
+		// Try to parse as semantic version
+		if version, err := s.parseSemanticVersion(tag.Name); err == nil {
+			tag.Version = version
+		}
+
+		tags = append(tags, tag)
+	}
+
+	return tags, nil
+}
+
+// CreateTag creates a new Git tag
+func (s *Service) CreateTag(tagName, message string, annotated bool) error {
+	var cmd *exec.Cmd
+	if annotated {
+		cmd = exec.Command("git", "tag", "-a", tagName, "-m", message)
+	} else {
+		cmd = exec.Command("git", "tag", tagName)
+	}
+	cmd.Dir = s.repoPath
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create tag %s: %w", tagName, err)
+	}
+
+	return nil
+}
+
+// HasUnstagedChanges checks if there are unstaged changes
+func (s *Service) HasUnstagedChanges() (bool, error) {
+	cmd := exec.Command("git", "diff", "--quiet")
+	cmd.Dir = s.repoPath
+	err := cmd.Run()
+	if err != nil {
+		// git diff --quiet returns non-zero exit code if there are differences
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return exitError.ExitCode() == 1, nil
+		}
+		return false, fmt.Errorf("failed to check unstaged changes: %w", err)
+	}
+	return false, nil
+}
+
+// isAnnotatedTag checks if a tag is annotated
+func (s *Service) isAnnotatedTag(tagName string) bool {
+	cmd := exec.Command("git", "cat-file", "-t", tagName)
+	cmd.Dir = s.repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(output)) == "tag"
+}
+
+// parseSemanticVersion attempts to parse a tag name as semantic version
+func (s *Service) parseSemanticVersion(tagName string) (*types.SemanticVersion, error) {
+	// Remove 'v' prefix if present
+	versionStr := strings.TrimPrefix(tagName, "v")
+
+	// Basic regex for semantic version
+	re := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)(?:\.(\d+))?)?$`)
+	matches := re.FindStringSubmatch(versionStr)
+
+	if len(matches) < 4 {
+		return nil, fmt.Errorf("not a semantic version")
+	}
+
+	major, _ := strconv.Atoi(matches[1])
+	minor, _ := strconv.Atoi(matches[2])
+	patch, _ := strconv.Atoi(matches[3])
+
+	version := &types.SemanticVersion{
+		Major: major,
+		Minor: minor,
+		Patch: patch,
+		Raw:   versionStr,
+	}
+
+	// Handle pre-release
+	if len(matches) > 4 && matches[4] != "" {
+		version.PreRelease = types.PreReleaseType(matches[4])
+		if len(matches) > 5 && matches[5] != "" {
+			if preNumber, err := strconv.Atoi(matches[5]); err == nil {
+				version.PreNumber = preNumber
+			}
+		}
+	}
+
+	return version, nil
 }
