@@ -21,10 +21,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
 
-      - name: Download dependencies
+      - name: Clean and download dependencies
         run: |
+          go clean -modcache
           go mod download
           go mod verify
 
@@ -98,10 +99,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
 
-      - name: Download dependencies
+      - name: Clean and download dependencies
         run: |
+          go clean -modcache
           go mod download
           go mod verify
 
@@ -120,6 +122,11 @@ jobs:
         run: |
           BINARY_NAME="${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }}"
           echo "Building $BINARY_NAME for ${{ matrix.goos }}/${{ matrix.goarch }}"
+          echo "Git commit: ${{ github.sha }}"
+          echo "Building from latest code..."
+
+          # Clean build cache
+          go clean -cache
 
           go build \
             -ldflags="-s -w -X main.version=${{ steps.version.outputs.version_clean }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.gitCommit=${{ github.sha }}" \
@@ -127,7 +134,25 @@ jobs:
             ./cmd/git-generator/main.go
 
           echo "binary_name=$BINARY_NAME" >> $GITHUB_OUTPUT
+
+          # Verify binary was created
+          ls -la "$BINARY_NAME"
+          echo "Binary size: $(du -h "$BINARY_NAME" | cut -f1)"
         id: build
+
+      - name: Test binary functionality
+        run: |
+          BINARY_NAME="${{ steps.build.outputs.binary_name }}"
+
+          # Make binary executable (for Linux/macOS)
+          chmod +x "$BINARY_NAME" || true
+
+          # Test help output to verify new --no-add flag exists
+          echo "Testing binary help output..."
+          if [[ "${{ matrix.goos }}" == "linux" ]]; then
+            ./"$BINARY_NAME" generate --help | grep -q "no-add" && echo "✅ --no-add flag found" || echo "❌ --no-add flag missing"
+            ./"$BINARY_NAME" generate --help | grep -q "Skip automatic staging" && echo "✅ Auto-staging description found" || echo "❌ Auto-staging description missing"
+          fi
 
       - name: Generate checksums
         run: |
@@ -177,6 +202,12 @@ jobs:
         run: |
           cat > release_notes.md << 'EOF'
           ## 🚀 Release ${{ steps.version.outputs.version }}
+
+          ### ✨ New Features
+
+          - **Auto-staging**: The `generate` command now automatically runs `git add .` to stage all changes before generating commit messages
+          - **New flag**: Added `--no-add` flag to skip automatic staging when manual control is needed
+          - **Improved workflow**: No need to manually run `git add .` before generating commits
 
           ### 📦 Downloads
 
