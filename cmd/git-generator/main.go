@@ -93,7 +93,8 @@ var generateCmd = &cobra.Command{
 	Use:   "generate",
 	Short: "Generate a commit message for staged changes",
 	Long: `Generate an AI-powered commit message based on your staged changes.
-The tool analyzes your git diff and creates a conventional commit message.`,
+The tool analyzes your git diff and creates a conventional commit message.
+By default, it will automatically stage all changes (git add .) before generating the commit message.`,
 	Aliases: []string{"gen", "g"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Get flags
@@ -101,6 +102,29 @@ The tool analyzes your git diff and creates a conventional commit message.`,
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		staged, _ := cmd.Flags().GetBool("staged")
 		multiple, _ := cmd.Flags().GetBool("multiple")
+		noAdd, _ := cmd.Flags().GetBool("no-add")
+
+		// Auto-stage changes unless --no-add is specified
+		if !noAdd && !dryRun {
+			gitService := git.NewService(".")
+			if !gitService.IsGitRepository() {
+				ui.ShowErrorMessage("Không phải trong Git repository")
+				return fmt.Errorf("not in a Git repository")
+			}
+
+			// Check if there are unstaged changes
+			hasUnstaged, err := gitService.HasUnstagedChanges()
+			if err != nil {
+				ui.ShowWarningMessage(fmt.Sprintf("Không thể kiểm tra unstaged changes: %v", err))
+			} else if hasUnstaged {
+				ui.ShowInfoMessage("🔄 Đang stage tất cả thay đổi (git add .)...")
+				if err := gitService.AddAll(); err != nil {
+					ui.ShowErrorMessage(fmt.Sprintf("Lỗi khi stage changes: %v", err))
+					return fmt.Errorf("failed to stage changes: %w", err)
+				}
+				ui.ShowSuccessMessage("✅ Đã stage tất cả thay đổi")
+			}
+		}
 
 		// Create generate request
 		req := interfaces.GenerateRequest{
@@ -140,9 +164,30 @@ var interactiveCmd = &cobra.Command{
 	Use:   "interactive",
 	Short: "Chế độ tương tác để cấu hình và tạo commit message",
 	Long: `Chạy git-generator trong chế độ tương tác với giao diện terminal thân thiện.
-Bạn có thể chọn các tùy chọn thông qua menu thay vì dòng lệnh.`,
+Bạn có thể chọn các tùy chọn thông qua menu thay vì dòng lệnh.
+Tự động stage tất cả thay đổi trước khi tạo commit message.`,
 	Aliases: []string{"i", "int"},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Auto-stage changes in interactive mode
+		gitService := git.NewService(".")
+		if !gitService.IsGitRepository() {
+			ui.ShowErrorMessage("Không phải trong Git repository")
+			return fmt.Errorf("not in a Git repository")
+		}
+
+		// Check if there are unstaged changes
+		hasUnstaged, err := gitService.HasUnstagedChanges()
+		if err != nil {
+			ui.ShowWarningMessage(fmt.Sprintf("Không thể kiểm tra unstaged changes: %v", err))
+		} else if hasUnstaged {
+			ui.ShowInfoMessage("🔄 Đang stage tất cả thay đổi (git add .)...")
+			if err := gitService.AddAll(); err != nil {
+				ui.ShowErrorMessage(fmt.Sprintf("Lỗi khi stage changes: %v", err))
+				return fmt.Errorf("failed to stage changes: %w", err)
+			}
+			ui.ShowSuccessMessage("✅ Đã stage tất cả thay đổi")
+		}
+
 		// Create generate request for interactive mode
 		req := interfaces.GenerateRequest{
 			Staged: true, // Default to staged changes in interactive mode
@@ -176,6 +221,7 @@ func init() {
 	generateCmd.Flags().BoolP("dry-run", "d", false, "Preview the commit message without applying it")
 	generateCmd.Flags().BoolP("staged", "S", true, "Use staged changes (default: true)")
 	generateCmd.Flags().BoolP("multiple", "m", false, "Generate multiple commit message options")
+	generateCmd.Flags().Bool("no-add", false, "Skip automatic staging of changes (git add .)")
 }
 
 var initCmd = &cobra.Command{

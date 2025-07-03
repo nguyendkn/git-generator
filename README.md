@@ -57,26 +57,26 @@ go install github.com/nguyendkn/git-generator/cmd/git-generator@latest
    export GEMINI_API_KEY=your_api_key_here
    ```
 
-3. **Stage your changes**:
-   ```bash
-   git add .
-   ```
-
-4. **Generate and apply commit message**:
+3. **Generate and apply commit message** (auto-stages changes):
    ```bash
    git-generator generate
    ```
+
+   > **Note**: The `generate` command automatically runs `git add .` to stage all changes before generating the commit message. Use `--no-add` flag to skip auto-staging if you want to manually control which files are staged.
 
 ## Usage
 
 ### Basic Commands
 
 ```bash
-# Generate commit message for staged changes
+# Generate commit message (auto-stages all changes)
 git-generator generate
 
 # Preview without committing (dry-run)
 git-generator generate --dry-run
+
+# Generate without auto-staging changes
+git-generator generate --no-add
 
 # Generate multiple options
 git-generator generate --multiple
@@ -99,6 +99,9 @@ git-generator config show
 - `--dry-run, -d`: Preview the commit message without applying it
 - `--staged, -S`: Use staged changes (default: true)
 - `--multiple, -m`: Generate multiple commit message options
+- `--no-add`: Skip automatic staging of changes (git add .)
+
+> **Auto-staging Feature**: By default, the `generate` command automatically runs `git add .` to stage all changes before generating the commit message. This streamlines the workflow by eliminating the need to manually stage files. Use the `--no-add` flag if you prefer to manually control which files are staged.
 
 #### `config` command
 

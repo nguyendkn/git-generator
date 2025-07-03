@@ -492,6 +492,16 @@ func (s *Service) HasUnstagedChanges() (bool, error) {
 	return false, nil
 }
 
+// AddAll stages all changes in the working directory
+func (s *Service) AddAll() error {
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = s.repoPath
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stage all changes: %w", err)
+	}
+	return nil
+}
+
 // isAnnotatedTag checks if a tag is annotated
 func (s *Service) isAnnotatedTag(tagName string) bool {
 	cmd := exec.Command("git", "cat-file", "-t", tagName)
