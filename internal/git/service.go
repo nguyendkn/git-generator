@@ -477,19 +477,32 @@ func (s *Service) CreateTag(tagName, message string, annotated bool) error {
 	return nil
 }
 
-// HasUnstagedChanges checks if there are unstaged changes
+// HasUnstagedChanges checks if there are unstaged changes (including untracked files)
 func (s *Service) HasUnstagedChanges() (bool, error) {
+	// Check for modified files
 	cmd := exec.Command("git", "diff", "--quiet")
 	cmd.Dir = s.repoPath
 	err := cmd.Run()
 	if err != nil {
 		// git diff --quiet returns non-zero exit code if there are differences
-		if exitError, ok := err.(*exec.ExitError); ok {
-			return exitError.ExitCode() == 1, nil
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+			return true, nil
 		}
-		return false, fmt.Errorf("failed to check unstaged changes: %w", err)
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() != 0 {
+			return false, fmt.Errorf("failed to check unstaged changes: %w", err)
+		}
 	}
-	return false, nil
+
+	// Check for untracked files
+	cmd = exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd.Dir = s.repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("failed to check untracked files: %w", err)
+	}
+
+	// If there are untracked files, we have unstaged changes
+	return len(strings.TrimSpace(string(output))) > 0, nil
 }
 
 // AddAll stages all changes in the working directory

@@ -108,6 +108,7 @@ By default, it will automatically stage all changes (git add .) before generatin
 		staged, _ := cmd.Flags().GetBool("staged")
 		multiple, _ := cmd.Flags().GetBool("multiple")
 		noAdd, _ := cmd.Flags().GetBool("no-add")
+		verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
 
 		// Auto-stage changes unless --no-add is specified
 		if !noAdd && !dryRun {
@@ -117,17 +118,35 @@ By default, it will automatically stage all changes (git add .) before generatin
 				return fmt.Errorf("not in a Git repository")
 			}
 
+			if verbose {
+				ui.ShowInfoMessage("🔍 Kiểm tra unstaged changes...")
+			}
+
 			// Check if there are unstaged changes
 			hasUnstaged, err := gitService.HasUnstagedChanges()
 			if err != nil {
 				ui.ShowWarningMessage(fmt.Sprintf("Không thể kiểm tra unstaged changes: %v", err))
 			} else if hasUnstaged {
+				if verbose {
+					ui.ShowInfoMessage("✅ Tìm thấy unstaged changes")
+				}
 				ui.ShowInfoMessage("🔄 Đang stage tất cả thay đổi (git add .)...")
 				if err := gitService.AddAll(); err != nil {
 					ui.ShowErrorMessage(fmt.Sprintf("Lỗi khi stage changes: %v", err))
 					return fmt.Errorf("failed to stage changes: %w", err)
 				}
 				ui.ShowSuccessMessage("✅ Đã stage tất cả thay đổi")
+			} else {
+				if verbose {
+					ui.ShowInfoMessage("ℹ️  Không có unstaged changes để stage")
+				}
+			}
+		} else if verbose {
+			if noAdd {
+				ui.ShowInfoMessage("⏭️  Bỏ qua auto-staging (--no-add được chỉ định)")
+			}
+			if dryRun {
+				ui.ShowInfoMessage("👁️  Chế độ dry-run, bỏ qua auto-staging")
 			}
 		}
 
@@ -173,6 +192,9 @@ Bạn có thể chọn các tùy chọn thông qua menu thay vì dòng lệnh.
 Tự động stage tất cả thay đổi trước khi tạo commit message.`,
 	Aliases: []string{"i", "int"},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Get verbose flag
+		verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
+
 		// Auto-stage changes in interactive mode
 		gitService := git.NewService(".")
 		if !gitService.IsGitRepository() {
@@ -180,17 +202,28 @@ Tự động stage tất cả thay đổi trước khi tạo commit message.`,
 			return fmt.Errorf("not in a Git repository")
 		}
 
+		if verbose {
+			ui.ShowInfoMessage("🔍 Kiểm tra unstaged changes trong chế độ interactive...")
+		}
+
 		// Check if there are unstaged changes
 		hasUnstaged, err := gitService.HasUnstagedChanges()
 		if err != nil {
 			ui.ShowWarningMessage(fmt.Sprintf("Không thể kiểm tra unstaged changes: %v", err))
 		} else if hasUnstaged {
+			if verbose {
+				ui.ShowInfoMessage("✅ Tìm thấy unstaged changes trong interactive mode")
+			}
 			ui.ShowInfoMessage("🔄 Đang stage tất cả thay đổi (git add .)...")
 			if err := gitService.AddAll(); err != nil {
 				ui.ShowErrorMessage(fmt.Sprintf("Lỗi khi stage changes: %v", err))
 				return fmt.Errorf("failed to stage changes: %w", err)
 			}
 			ui.ShowSuccessMessage("✅ Đã stage tất cả thay đổi")
+		} else {
+			if verbose {
+				ui.ShowInfoMessage("ℹ️  Không có unstaged changes trong interactive mode")
+			}
 		}
 
 		// Create generate request for interactive mode
@@ -243,6 +276,10 @@ func init() {
 	generateCmd.Flags().BoolP("staged", "S", true, "Use staged changes (default: true)")
 	generateCmd.Flags().BoolP("multiple", "m", false, "Generate multiple commit message options")
 	generateCmd.Flags().Bool("no-add", false, "Skip automatic staging of changes (git add .)")
+	generateCmd.Flags().BoolP("verbose", "v", false, "Enable verbose output for debugging")
+
+	interactiveCmd.Flags().BoolP("verbose", "v", false, "Enable verbose output for debugging")
+	statusCmd.Flags().BoolP("verbose", "v", false, "Enable verbose output for debugging")
 }
 
 var initCmd = &cobra.Command{
@@ -328,6 +365,7 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Hiển thị trạng thái repository và tóm tắt thay đổi",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		verbose, _ := cmd.Root().PersistentFlags().GetBool("verbose")
 		gitService := git.NewService(".")
 
 		if !gitService.IsGitRepository() {
@@ -337,6 +375,21 @@ var statusCmd = &cobra.Command{
 
 		ui.PrintHeader("Trạng thái Repository")
 
+		// Check for unstaged changes
+		hasUnstaged, err := gitService.HasUnstagedChanges()
+		if err != nil {
+			ui.ShowErrorMessage(fmt.Sprintf("Lỗi kiểm tra unstaged changes: %v", err))
+		} else {
+			if hasUnstaged {
+				ui.ShowWarningMessage("📝 Có unstaged changes")
+				if verbose {
+					ui.ShowInfoMessage("   → Sẽ được auto-stage khi chạy generate")
+				}
+			} else {
+				ui.ShowInfoMessage("✅ Không có unstaged changes")
+			}
+		}
+
 		// Check for staged changes
 		hasStaged, err := gitService.HasStagedChanges()
 		if err != nil {
@@ -345,9 +398,9 @@ var statusCmd = &cobra.Command{
 		}
 
 		if hasStaged {
-			ui.ShowSuccessMessage("Có staged changes")
+			ui.ShowSuccessMessage("✅ Có staged changes")
 		} else {
-			ui.ShowWarningMessage("Không có staged changes")
+			ui.ShowWarningMessage("⚠️  Không có staged changes")
 		}
 
 		if hasStaged {
