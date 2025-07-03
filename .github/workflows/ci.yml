@@ -111,8 +111,12 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_CLEAN=${VERSION#v}
+          echo "Raw GITHUB_REF: $GITHUB_REF"
+          echo "Extracted VERSION: $VERSION"
+          echo "Clean VERSION: $VERSION_CLEAN"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_clean=${VERSION#v}" >> $GITHUB_OUTPUT
+          echo "version_clean=$VERSION_CLEAN" >> $GITHUB_OUTPUT
 
       - name: Build binary
         env:
@@ -122,14 +126,22 @@ jobs:
         run: |
           BINARY_NAME="${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }}"
           echo "Building $BINARY_NAME for ${{ matrix.goos }}/${{ matrix.goarch }}"
+          echo "Version from tag: ${{ steps.version.outputs.version }}"
+          echo "Clean version: ${{ steps.version.outputs.version_clean }}"
           echo "Git commit: ${{ github.sha }}"
           echo "Building from latest code..."
 
           # Clean build cache
           go clean -cache
 
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "Build time: $BUILD_TIME"
+
+          LDFLAGS="-s -w -X main.version=${{ steps.version.outputs.version_clean }} -X main.buildTime=$BUILD_TIME -X main.gitCommit=${{ github.sha }}"
+          echo "LDFLAGS: $LDFLAGS"
+
           go build \
-            -ldflags="-s -w -X main.version=${{ steps.version.outputs.version_clean }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.gitCommit=${{ github.sha }}" \
+            -ldflags="$LDFLAGS" \
             -o "$BINARY_NAME" \
             ./cmd/git-generator/main.go
 
@@ -147,11 +159,22 @@ jobs:
           # Make binary executable (for Linux/macOS)
           chmod +x "$BINARY_NAME" || true
 
-          # Test help output to verify new --no-add flag exists
-          echo "Testing binary help output..."
+          # Test version information to verify build metadata
+          echo "Testing version metadata..."
           if [[ "${{ matrix.goos }}" == "linux" ]]; then
+            echo "=== Testing version command ==="
+            ./"$BINARY_NAME" info || echo "Version command failed"
+
+            echo "=== Testing version in banner ==="
+            ./"$BINARY_NAME" generate --help | head -10 | grep -q "${{ steps.version.outputs.version_clean }}" && echo "✅ Version ${{ steps.version.outputs.version_clean }} found in banner" || echo "❌ Version not found in banner"
+
+            echo "=== Verifying no hard-coded version ==="
+            ./"$BINARY_NAME" generate --help | head -10 | grep -q "1.0.0" && echo "❌ Hard-coded version 1.0.0 still present" || echo "✅ Hard-coded version removed"
+
+            echo "=== Testing auto-staging features ==="
             ./"$BINARY_NAME" generate --help | grep -q "no-add" && echo "✅ --no-add flag found" || echo "❌ --no-add flag missing"
             ./"$BINARY_NAME" generate --help | grep -q "Skip automatic staging" && echo "✅ Auto-staging description found" || echo "❌ Auto-staging description missing"
+            ./"$BINARY_NAME" generate --help | grep -q "automatically stage all changes" && echo "✅ Auto-staging help text found" || echo "❌ Auto-staging help text missing"
           fi
 
       - name: Generate checksums
@@ -183,8 +206,12 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
+          VERSION_CLEAN=${VERSION#v}
+          echo "Raw GITHUB_REF: $GITHUB_REF"
+          echo "Extracted VERSION: $VERSION"
+          echo "Clean VERSION: $VERSION_CLEAN"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_clean=${VERSION#v}" >> $GITHUB_OUTPUT
+          echo "version_clean=$VERSION_CLEAN" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -205,7 +232,10 @@ jobs:
 
           ### ✨ New Features
 
-          - **Auto-staging**: The `generate` command now automatically runs `git add .` to stage all changes before generating commit messages
+          - **Dynamic Version Display**: Version information is now read from binary metadata instead of hard-coded values
+          - **Build Metadata**: Binary includes build time, Git commit hash, and version from tags
+          - **New Info Command**: Added `git-generator info` command to display detailed version information
+          - **Auto-staging**: The `generate` command automatically runs `git add .` to stage all changes before generating commit messages
           - **New flag**: Added `--no-add` flag to skip automatic staging when manual control is needed
           - **Improved workflow**: No need to manually run `git add .` before generating commits
 
