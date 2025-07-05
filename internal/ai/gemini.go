@@ -674,4 +674,3 @@ func (gc *GeminiClient) parseVersionAnalysis(responseText string) (*types.Versio
 
 	return analysis, nil
 }
-// Final enhanced parsing test
