@@ -202,13 +202,19 @@ func (gc *GeminiClient) buildPrompt(processedDiff *diff.ProcessedDiff, style str
 		prompt.WriteString("\n<why the change was made and its purpose>\n")
 		prompt.WriteString("<context from previous related changes if relevant>\n")
 		prompt.WriteString("[optional footer(s)]\n\n")
+		prompt.WriteString("IMPORTANT: Choose ONLY ONE type that best represents the primary change:\n")
 		prompt.WriteString("Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert\n")
-		prompt.WriteString("- Use 'feat' for new features\n")
+		prompt.WriteString("- Use 'feat' for new features or functionality\n")
 		prompt.WriteString("- Use 'fix' for bug fixes\n")
 		prompt.WriteString("- Use 'docs' for documentation changes\n")
-		prompt.WriteString("- Use 'refactor' for code refactoring\n")
+		prompt.WriteString("- Use 'refactor' for code refactoring without changing functionality\n")
 		prompt.WriteString("- Use 'test' for test-related changes\n")
-		prompt.WriteString("- Use 'chore' for maintenance tasks\n\n")
+		prompt.WriteString("- Use 'chore' for maintenance tasks, build changes, or tooling\n")
+		prompt.WriteString("- Use 'style' for formatting, missing semicolons, etc.\n")
+		prompt.WriteString("- Use 'perf' for performance improvements\n")
+		prompt.WriteString("- Use 'build' for build system or external dependencies\n")
+		prompt.WriteString("- Use 'ci' for CI configuration files and scripts\n\n")
+		prompt.WriteString("DO NOT mix multiple types in one commit message. Choose the most appropriate single type.\n\n")
 	case "simple":
 		prompt.WriteString("Generate a simple, clear commit message that describes what was changed and why.\n")
 		prompt.WriteString("Keep it concise but include the reasoning behind the change.\n\n")
@@ -349,9 +355,30 @@ func (gc *GeminiClient) parseCommitMessage(response, style string) (*types.Commi
 	if style == "conventional" {
 		// Parse conventional commit format
 		if err := gc.parseConventionalCommit(subject, commitMsg); err != nil {
-			// Fallback to simple parsing if conventional parsing fails
-			commitMsg.Type = types.CommitTypeChore
-			commitMsg.Description = subject
+			// If parsing fails, try to extract type manually or fallback gracefully
+			if strings.Contains(subject, ":") {
+				// Try to extract type from malformed conventional commit
+				parts := strings.SplitN(subject, ":", 2)
+				if len(parts) == 2 {
+					typeStr := strings.TrimSpace(parts[0])
+					// Remove scope if present
+					if idx := strings.Index(typeStr, "("); idx != -1 {
+						typeStr = typeStr[:idx]
+					}
+					// Remove breaking change indicator
+					typeStr = strings.TrimSuffix(typeStr, "!")
+
+					commitMsg.Type = types.CommitType(typeStr)
+					commitMsg.Description = strings.TrimSpace(parts[1])
+				} else {
+					commitMsg.Type = types.CommitTypeChore
+					commitMsg.Description = subject
+				}
+			} else {
+				// No colon found, treat as simple description
+				commitMsg.Type = types.CommitTypeChore
+				commitMsg.Description = subject
+			}
 		}
 	} else {
 		// Simple format
@@ -431,8 +458,26 @@ func (gc *GeminiClient) parseConventionalCommit(subject string, commitMsg *types
 		commitMsg.Type = types.CommitType(typeAndScope)
 	}
 
+	// Validate that description doesn't contain another type
+	description = gc.cleanDescription(description)
 	commitMsg.Description = description
 	return nil
+}
+
+// cleanDescription removes any commit type prefixes from the description
+func (gc *GeminiClient) cleanDescription(description string) string {
+	// List of commit types that might appear in description
+	commitTypes := []string{"feat:", "fix:", "docs:", "style:", "refactor:", "perf:", "test:", "build:", "ci:", "chore:", "revert:"}
+
+	// Remove any commit type prefix from description
+	for _, commitType := range commitTypes {
+		if strings.HasPrefix(strings.ToLower(description), commitType) {
+			description = strings.TrimSpace(description[len(commitType):])
+			break
+		}
+	}
+
+	return description
 }
 
 // buildVersionAnalysisPrompt creates a prompt for version analysis
