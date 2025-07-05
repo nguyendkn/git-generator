@@ -56,6 +56,7 @@ func (p *Processor) ProcessDiff(summary *types.DiffSummary) (*ProcessedDiff, err
 		TotalAdded:   summary.TotalAdded,
 		TotalDeleted: summary.TotalDeleted,
 		Languages:    p.extractLanguages(sortedFiles),
+		DiffSummary:  summary, // Store original diff summary for scope detection
 	}, nil
 }
 
@@ -68,6 +69,7 @@ type ProcessedDiff struct {
 	TotalDeleted  int                  `json:"total_deleted"`
 	Languages     map[string]int       `json:"languages"`
 	ChangeContext *types.ChangeContext `json:"change_context,omitempty"`
+	DiffSummary   *types.DiffSummary   `json:"diff_summary,omitempty"` // Original diff summary for scope detection
 }
 
 // SetChangeContext adds change context to the processed diff

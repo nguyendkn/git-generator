@@ -11,15 +11,17 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/nguyendkn/git-generator/internal/diff"
+	"github.com/nguyendkn/git-generator/internal/scope"
 	"github.com/nguyendkn/git-generator/pkg/types"
 )
 
 // GeminiClient handles interactions with Google Gemini API
 type GeminiClient struct {
-	client      *genai.Client
-	model       *genai.GenerativeModel
-	config      types.GeminiConfig
-	rateLimiter *RateLimiter
+	client        *genai.Client
+	model         *genai.GenerativeModel
+	config        types.GeminiConfig
+	rateLimiter   *RateLimiter
+	scopeDetector *scope.Detector
 }
 
 // RateLimiter implements simple rate limiting
@@ -98,10 +100,11 @@ func NewGeminiClient(config types.GeminiConfig) (*GeminiClient, error) {
 	}
 
 	return &GeminiClient{
-		client:      client,
-		model:       model,
-		config:      config,
-		rateLimiter: NewRateLimiter(10), // 10 requests per minute
+		client:        client,
+		model:         model,
+		config:        config,
+		rateLimiter:   NewRateLimiter(10), // 10 requests per minute
+		scopeDetector: scope.NewDetector(),
 	}, nil
 }
 
@@ -215,6 +218,34 @@ func (gc *GeminiClient) buildPrompt(processedDiff *diff.ProcessedDiff, style str
 		prompt.WriteString("- Use 'build' for build system or external dependencies\n")
 		prompt.WriteString("- Use 'ci' for CI configuration files and scripts\n\n")
 		prompt.WriteString("DO NOT mix multiple types in one commit message. Choose the most appropriate single type.\n\n")
+
+		// Add scope detection information for conventional commits
+		if processedDiff.DiffSummary != nil {
+			detectedScope := gc.scopeDetector.DetectScope(processedDiff.DiffSummary)
+			multipleScopes := gc.scopeDetector.DetectMultipleScopes(processedDiff.DiffSummary)
+
+			if detectedScope != "" {
+				prompt.WriteString("## Scope Detection Analysis:\n")
+				prompt.WriteString(fmt.Sprintf("Primary detected scope: '%s'\n", detectedScope))
+
+				if len(multipleScopes) > 1 {
+					prompt.WriteString("Multiple scopes detected:\n")
+					for scope, confidence := range multipleScopes {
+						prompt.WriteString(fmt.Sprintf("- %s (%.1f%% confidence)\n", scope, confidence*100))
+					}
+					prompt.WriteString("\nGuidelines for scope selection:\n")
+					prompt.WriteString("- If changes affect a single module/component, use that as scope\n")
+					prompt.WriteString("- If changes affect multiple modules, consider using the primary module or omit scope for broader changes\n")
+					prompt.WriteString("- For core/shared changes, use 'core' or omit scope\n")
+				} else {
+					prompt.WriteString(fmt.Sprintf("Use scope '%s' in your conventional commit format.\n", detectedScope))
+				}
+				prompt.WriteString("\n")
+			} else {
+				prompt.WriteString("## Scope Detection:\n")
+				prompt.WriteString("No clear module pattern detected. Generate conventional commit without scope.\n\n")
+			}
+		}
 	case "simple":
 		prompt.WriteString("Generate a simple, clear commit message that describes what was changed and why.\n")
 		prompt.WriteString("Keep it concise but include the reasoning behind the change.\n\n")

@@ -42,13 +42,18 @@ func (d *Detector) DetectScope(diffSummary *types.DiffSummary) string {
 		filePaths = append(filePaths, file.Path)
 	}
 
-	// Find the best matching scope
+	// Find the best matching scope with priority consideration
 	scopeCounts := make(map[string]int)
+	scopePriorities := make(map[string]int)
 
 	for _, filePath := range filePaths {
-		scope := d.detectScopeForFile(filePath)
+		scope, priority := d.detectScopeForFileWithPriority(filePath)
 		if scope != "" {
 			scopeCounts[scope]++
+			// Keep track of the highest priority for each scope
+			if existingPriority, exists := scopePriorities[scope]; !exists || priority > existingPriority {
+				scopePriorities[scope] = priority
+			}
 		}
 	}
 
@@ -57,19 +62,36 @@ func (d *Detector) DetectScope(diffSummary *types.DiffSummary) string {
 		return ""
 	}
 
-	// Find the scope with the highest count
+	// Find the scope with the highest count, with priority as tiebreaker
 	var bestScope string
 	var maxCount int
+	var bestPriority int
 
 	for scope, count := range scopeCounts {
-		if count > maxCount {
+		priority := scopePriorities[scope]
+		if count > maxCount || (count == maxCount && priority > bestPriority) {
 			maxCount = count
 			bestScope = scope
+			bestPriority = priority
 		}
 	}
 
-	// Only return scope if it covers a significant portion of files
-	if float64(maxCount)/float64(len(filePaths)) >= 0.5 {
+	// Return scope based on different criteria
+	totalFiles := len(filePaths)
+	coverage := float64(maxCount) / float64(totalFiles)
+
+	// For single file changes, always return the detected scope
+	if totalFiles == 1 && bestScope != "" {
+		return bestScope
+	}
+
+	// For multiple files, require at least 50% coverage OR if it's a high-priority scope
+	if coverage >= 0.5 {
+		return bestScope
+	}
+
+	// For mixed changes, check if there's a dominant high-priority scope
+	if maxCount >= 2 && d.isHighPriorityScope(bestScope) {
 		return bestScope
 	}
 
@@ -104,17 +126,45 @@ func (d *Detector) DetectMultipleScopes(diffSummary *types.DiffSummary) map[stri
 // detectScopeForFile detects scope for a single file
 func (d *Detector) detectScopeForFile(filePath string) string {
 	for _, rule := range d.rules {
-		matched, err := regexp.MatchString(rule.Pattern, filePath)
+		re, err := regexp.Compile(rule.Pattern)
 		if err != nil {
 			continue // Skip invalid regex patterns
 		}
 
-		if matched {
-			return rule.Scope
+		matches := re.FindStringSubmatch(filePath)
+		if len(matches) > 0 {
+			scope := rule.Scope
+			// Replace capture groups in scope (e.g., "$1" with first capture group)
+			if len(matches) > 1 && strings.Contains(scope, "$1") {
+				scope = strings.ReplaceAll(scope, "$1", matches[1])
+			}
+			return scope
 		}
 	}
 
 	return ""
+}
+
+// detectScopeForFileWithPriority detects scope for a single file and returns priority
+func (d *Detector) detectScopeForFileWithPriority(filePath string) (string, int) {
+	for _, rule := range d.rules {
+		re, err := regexp.Compile(rule.Pattern)
+		if err != nil {
+			continue // Skip invalid regex patterns
+		}
+
+		matches := re.FindStringSubmatch(filePath)
+		if len(matches) > 0 {
+			scope := rule.Scope
+			// Replace capture groups in scope (e.g., "$1" with first capture group)
+			if len(matches) > 1 && strings.Contains(scope, "$1") {
+				scope = strings.ReplaceAll(scope, "$1", matches[1])
+			}
+			return scope, rule.Priority
+		}
+	}
+
+	return "", 0
 }
 
 // SuggestScopeFromContent analyzes file content to suggest more specific scopes
@@ -164,6 +214,25 @@ func (d *Detector) SuggestScopeFromContent(diffSummary *types.DiffSummary) strin
 // getDefaultScopeRules returns the default set of scope detection rules
 func getDefaultScopeRules() []types.ScopeDetectionRule {
 	return []types.ScopeDetectionRule{
+		// Go-specific patterns (high priority)
+		{
+			Pattern:     `^cmd/([^/]+)/`,
+			Scope:       "cmd",
+			Priority:    95,
+			Description: "Go command applications",
+		},
+		{
+			Pattern:     `^internal/([^/]+)/`,
+			Scope:       "$1",
+			Priority:    90,
+			Description: "Go internal packages",
+		},
+		{
+			Pattern:     `^pkg/([^/]+)/`,
+			Scope:       "$1",
+			Priority:    90,
+			Description: "Go public packages",
+		},
 		// Frontend/UI
 		{
 			Pattern:     `\.(js|jsx|ts|tsx|vue|svelte|html|css|scss|sass|less)$`,
@@ -372,4 +441,21 @@ func (d *Detector) GetMatchingRules(filePath string) []types.ScopeDetectionRule 
 	}
 
 	return matchingRules
+}
+
+// isHighPriorityScope checks if a scope represents a high-priority module
+func (d *Detector) isHighPriorityScope(scope string) bool {
+	highPriorityScopes := []string{
+		"auth", "api", "db", "security", "core", "config", "ci",
+		// Add module-specific scopes that are typically important
+		"user", "payment", "order", "notification", "admin",
+	}
+
+	for _, highPriority := range highPriorityScopes {
+		if scope == highPriority {
+			return true
+		}
+	}
+
+	return false
 }
